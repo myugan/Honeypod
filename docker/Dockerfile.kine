@@ -1,0 +1,16 @@
+# Repackages the real, unmodified upstream kine binary (SQLite-backed
+# implementation of etcd's v3 gRPC API -- this is what lets a Honeypod's
+# inner kube-apiserver run without a real etcd cluster) into a minimal,
+# non-root image consistent with this project's other containers, rather
+# than vendoring the binary by hand. Nothing here is our own logic --
+# `rancher/kine` is the real upstream project's own published image.
+FROM rancher/kine:latest AS kine
+
+FROM gcr.io/distroless/static-debian12:nonroot
+# NOTE: path is rancher/kine's own published binary location (/bin/kine as
+# of the upstream Dockerfile at the time this was written); verify against
+# whatever kine tag is actually pinned before building, since an untagged
+# `:latest` here can drift.
+COPY --from=kine /bin/kine /kine
+USER 65532:65532
+ENTRYPOINT ["/kine"]

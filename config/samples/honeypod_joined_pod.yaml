@@ -1,0 +1,53 @@
+# Example real Pod joining the "checkout-api-decoy" Honeypod
+# (config/samples/honeypod.yaml) by annotation, instead of
+# hand-authoring a matching spec.fakePods entry. This is the whole
+# manifest needed to join an existing pod -- the annotation is the only
+# thing this file adds.
+#
+# The annotation value here is "<namespace>/<Honeypod name>", fully
+# qualified, because this Pod and the Honeypod CR live in different
+# namespaces. If they're in the same namespace instead, and exactly one
+# Honeypod exists there, the value can just be "true" (must be quoted,
+# since it's a real annotation string, not a YAML boolean):
+#   annotations:
+#     honeypod.io/join: "true"
+#
+# Once applied, two independent things happen:
+#
+#  1. The operator's reconciler (honeypod_controller.go) mirrors this Pod's
+#     name, namespace, containers[].image, and labels (metadata only --
+#     never its Secrets/volumes/ServiceAccount) into the fake API's seed,
+#     and lists it under `status.joinedPods` on the checkout-api-decoy
+#     Honeypod. This always happens, on every reconcile, whether or not the
+#     pod was already running when annotated. The real node it runs on is
+#     deliberately not copied: inside the honeypot the pod is placed on one
+#     of spec.fakeNodes, so the real cluster's node names stay hidden.
+#  2. If this Pod is admitted (CREATE) while the
+#     honeypod.io/join MutatingWebhookConfiguration
+#     (config/manager/webhook.yaml) is installed and reachable, it also
+#     gets KUBERNETES_SERVICE_HOST/KUBERNETES_SERVICE_PORT overridden in
+#     every container's own env, pointed at this Honeypod's Service instead
+#     of the real cluster's, plus the decoy ServiceAccount-token volume
+#     (internal/controller/join_webhook.go) -- so tools inside this pod
+#     that discover "the" Kubernetes API via the standard in-cluster config
+#     mechanism talk to the decoy instead of the real cluster, with no
+#     network-layer redirect or extra capability needed. This only applies
+#     at CREATE time (admission webhooks don't see existing pods), so an
+#     *already-running* pod that gets this annotation added later is
+#     mirrored into the seed (item 1, on its next reconcile) but does not
+#     retroactively get the env override/volume injected into its
+#     already-running spec -- it would need to be recreated.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: httpbin-gateway
+  namespace: web
+  annotations:
+    honeypod.io/join: "honeypod-decoy/httpbin-decoy"
+  labels:
+    app: httpbin-gateway
+    tier: frontend
+spec:
+  containers:
+  - name: gateway
+    image: nginx:alpine

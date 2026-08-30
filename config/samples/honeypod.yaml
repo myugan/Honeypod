@@ -1,0 +1,27 @@
+apiVersion: honeypod.io/v1alpha1
+kind: Decoy
+metadata:
+  name: httpbin-decoy
+  namespace: honeypod-decoy
+spec:
+  # Images, port, and replicas all default sensibly; nothing here is
+  # required beyond fakeNodes. See config/samples/honeypod_joined_pod.yaml
+  # for putting a decoy on an existing real pod instead.
+  fakeNodes:
+  - name: zeno-md-1-h8k3n-q9x2p
+    kubeletVersion: v1.35.0
+  fakePods:
+  - name: httpbin
+    namespace: web
+    containers:
+    - name: httpbin
+      image: kennethreitz/httpbin:latest
+    logLines:
+    - "[2026-08-26 09:12:04 +0000] [1] [INFO] Starting gunicorn 19.9.0"
+    - "[2026-08-26 09:12:04 +0000] [1] [INFO] Listening at: http://0.0.0.0:80 (1)"
+  fakeSecrets:
+  - name: httpbin-basic-auth
+    namespace: web
+    data:
+      username: httpbin_svc
+      password: hunter2-decoy-not-real

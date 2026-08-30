@@ -1,0 +1,8 @@
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "honeypod.namespace" . }}
+  labels:
+    {{- include "honeypod.labels" . | nindent 4 }}
+{{- end }}

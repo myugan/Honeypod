@@ -1,0 +1,16 @@
+Honeypod operator installed as release "{{ .Release.Name }}".
+
+Namespace: {{ include "honeypod.namespace" . }}
+  The operator is pinned to this namespace. Its decoys' NetworkPolicy and
+  audit routing derive from it at the operator's build time, so installing
+  elsewhere silently breaks audit egress. Always install with:
+    helm install {{ .Release.Name }} . -n honeypod --create-namespace
+
+Check it came up:
+  kubectl -n {{ include "honeypod.namespace" . }} get deploy {{ include "honeypod.fullname" . }}
+
+Stand up a decoy:
+  kubectl apply -f https://raw.githubusercontent.com/myugan/Honeypod/main/config/samples/honeypod.yaml
+  kubectl get decoys -A
+
+Then follow docs/quickstart.md to reach the decoy with its own credentials.

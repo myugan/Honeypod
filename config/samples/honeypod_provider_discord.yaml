@@ -1,0 +1,18 @@
+# Discord webhook URL kept out of the Provider spec itself.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: discord-webhook
+  namespace: honeypod-decoy
+stringData:
+  address: https://discord.com/api/webhooks/REPLACE_WITH_WEBHOOK_ID/REPLACE_WITH_WEBHOOK_TOKEN
+---
+apiVersion: honeypod.io/v1alpha1
+kind: Provider
+metadata:
+  name: discord
+  namespace: honeypod-decoy
+spec:
+  type: discord
+  secretRef:
+    name: discord-webhook

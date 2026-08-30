@@ -1,0 +1,32 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  # Name must match the manager's --join-webhook-config-name arg (set in the
+  # Deployment), since the manager patches this object's caBundle at startup.
+  name: {{ include "honeypod.fullname" . }}-pod-join
+  labels:
+    {{- include "honeypod.labels" . | nindent 4 }}
+webhooks:
+- name: podjoin.honeypod.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  # Ignore, not Fail: this webhook's rules necessarily match every Pod CREATE
+  # cluster-wide (annotations can't be selected on), and the honeypod.io/join
+  # check happens inside the handler. It must never block ordinary pod
+  # creation when briefly unreachable.
+  failurePolicy: Ignore
+  reinvocationPolicy: Never
+  timeoutSeconds: 5
+  clientConfig:
+    service:
+      name: {{ include "honeypod.fullname" . }}-webhook
+      namespace: {{ include "honeypod.namespace" . }}
+      path: /mutate-pods
+      port: 443
+    # Patched at manager startup (see internal/controller.PatchMutatingWebhookCABundle).
+    caBundle: ""
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE"]
+    resources: ["pods"]

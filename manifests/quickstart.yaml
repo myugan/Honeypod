@@ -1,0 +1,1265 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: honeypod
+  labels:
+    app.kubernetes.io/managed-by: honeypod-operator
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: decoys.honeypod.io
+spec:
+  group: honeypod.io
+  names:
+    kind: Decoy
+    listKind: DecoyList
+    plural: decoys
+    shortNames:
+    - dc
+    singular: decoy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.intrusionActivity.requestCount
+      name: Hits
+      type: integer
+    - jsonPath: .status.intrusionActivity.lastSeen
+      name: Last-Seen
+      type: date
+    - jsonPath: .status.credentialsSecret
+      name: Secret
+      priority: 1
+      type: string
+    - jsonPath: .status.endpoint
+      name: Endpoint
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Decoy is the Schema for the decoys API. It describes an isolated,
+          fully decoy Kubernetes control plane -- a real kube-apiserver (backed by
+          kine, no real etcd), seeded by kubelet-shim with synthetic Nodes/Pods/
+          Secrets -- authenticated only by a decoy token with zero access to any
+          real cluster, with every request recorded in real Kubernetes audit-log
+          format via kube-apiserver's own audit webhook.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DecoySpec defines the desired state of a Decoy environment.
+            properties:
+              auditLevel:
+                default: RequestResponse
+                description: |-
+                  AuditLevel is how much the decoy apiserver records for every request:
+                  None logs nothing, Metadata logs who/what/when without bodies, Request
+                  adds the request body, and RequestResponse (the default) adds the
+                  response too. The operator filters this stream itself for alerts and the
+                  activity summary, so a lower level also captures less attacker detail.
+                enum:
+                - None
+                - Metadata
+                - Request
+                - RequestResponse
+                type: string
+              execIsolation:
+                description: |-
+                  ExecIsolation runs each `kubectl exec` session in its own PID/mount/UTS
+                  namespace, so `ps` and /proc/1 show only that session and each pod
+                  reports its own hostname. Off by default. It needs the exec container to
+                  run as root with CAP_SYS_ADMIN and seccomp unconfined, which on the host
+                  runtime is a real container-escape surface, so it is only allowed when
+                  spec.runtimeClassName is also set: a CRD validation rejects
+                  execIsolation without a runtime, so the added privilege is always
+                  bounded by a sandboxed runtime such as gVisor rather than the host
+                  kernel. It does not give the pod's real image contents; use the
+                  distroless profile for pods that should have no shell.
+                type: boolean
+              execProfile:
+                default: shell
+                description: |-
+                  ExecProfile selects the environment a `kubectl exec` session presents,
+                  to match the kind of image the pods claim to run:
+                    - "shell" (default): a full /bin/sh with the usual tools.
+                    - "minimal": a busybox shell (busybox applets only), like alpine.
+                    - "distroless": no shell; exec fails with the real "executable file
+                      not found" error like a distroless image (and runs no process).
+                enum:
+                - shell
+                - minimal
+                - distroless
+                type: string
+              fakeCRDs:
+                description: |-
+                  FakeCRDs are CustomResourceDefinitions installed into the decoy's
+                  inner apiserver as real CRDs, so `kubectl get crds` lists them and
+                  their custom resource types are served -- making the decoy look like
+                  it runs the operators a real cluster would (cert-manager, Argo, etc.).
+                  A believable default set is seeded automatically when
+                  seedSystemComponents is true; entries here are added on top.
+                items:
+                  description: |-
+                    FakeCRD describes a CustomResourceDefinition to install into the decoy.
+                    The served schema is permissive (unknown fields preserved): a decoy only
+                    needs the type to appear in discovery and `kubectl get crds`, and custom
+                    resources of it to be creatable/listable, not full field validation.
+                  properties:
+                    group:
+                      description: Group is the API group, e.g. "cert-manager.io".
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    kind:
+                      description: Kind is the resource kind, e.g. "Certificate".
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    plural:
+                      description: |-
+                        Plural is the lowercase plural name, e.g. "certificates". It is the
+                        list-map key, so it must be unique within spec.fakeCRDs.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    scope:
+                      description: Scope is "Namespaced" (default) or "Cluster".
+                      enum:
+                      - Namespaced
+                      - Cluster
+                      type: string
+                    shortNames:
+                      description: ShortNames are optional CLI aliases, e.g. ["cert","certs"].
+                      items:
+                        type: string
+                      type: array
+                    singular:
+                      description: Singular is the lowercase singular; defaults to
+                        the lowercased Kind.
+                      type: string
+                    versions:
+                      description: |-
+                        Versions served by this CRD; defaults to ["v1"]. The first entry is
+                        the storage version.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - group
+                  - kind
+                  - plural
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - plural
+                x-kubernetes-list-type: map
+              fakeNodes:
+                description: FakeNodes are the Nodes an attacker sees inside the honeypot.
+                items:
+                  description: FakeNode is a decoy Node the honeypot serves.
+                  properties:
+                    internalIP:
+                      description: InternalIP reported for the fake node.
+                      type: string
+                    kubeletVersion:
+                      description: KubeletVersion reported for the fake node.
+                      type: string
+                    name:
+                      description: Name of the fake node.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              fakePods:
+                description: |-
+                  FakePods are the Pods an attacker sees inside the honeypot. Write an
+                  entry here for a pod that exists nowhere for real. To make a pod that
+                  already exists show up instead, leave it out and annotate that real
+                  Pod with honeypod.io/join, which mirrors it in automatically.
+                items:
+                  description: FakePod is a decoy Pod, or a set of replicas, the honeypot
+                    serves.
+                  properties:
+                    containers:
+                      description: Containers making up each fake pod.
+                      items:
+                        description: FakeContainer is one container of a decoy Pod.
+                        properties:
+                          image:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                        - image
+                        - name
+                        type: object
+                      type: array
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: 'Labels are applied to each fake pod object. Defaults
+                        to {"app": Name}.'
+                      type: object
+                    logLines:
+                      description: LogLines are the fake lines served by `kubectl
+                        logs` for this pod, in order.
+                      items:
+                        type: string
+                      type: array
+                    name:
+                      description: Name is the base name for the fake pod(s).
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: Namespace the fake pod(s) live in.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    nodeName:
+                      description: |-
+                        NodeName the fake pod(s) claim to be scheduled on. Must name one of
+                        spec.fakeNodes. Defaults to the first one.
+                      maxLength: 253
+                      type: string
+                    replicas:
+                      default: 1
+                      description: Replicas is how many fake pod objects to synthesize.
+                      format: int32
+                      type: integer
+                  required:
+                  - containers
+                  - name
+                  - namespace
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
+              fakeSecrets:
+                description: |-
+                  FakeSecrets are the Secrets an attacker sees inside the honeypot.
+                  Put believable-looking credentials here to bait theft, never real ones.
+                items:
+                  description: FakeSecret is a decoy Secret the honeypot serves, to
+                    bait credential theft.
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                  required:
+                  - data
+                  - name
+                  - namespace
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
+              kineImage:
+                default: rancher/kine:latest
+                description: |-
+                  KineImage overrides the kine image, which stores the honeypot's data
+                  in SQLite so no real etcd is needed.
+                type: string
+              kubeAPIServerImage:
+                description: |-
+                  KubeAPIServerImage overrides the image KubernetesVersion would pick,
+                  for a private registry or a repackaged build. Its tag should still
+                  match KubernetesVersion.
+                type: string
+              kubeletShimImage:
+                description: |-
+                  KubeletShimImage overrides the kubelet-shim image, for a private
+                  registry or a custom build. Defaults to honeypod/kubelet-shim:latest.
+                type: string
+              kubernetesVersion:
+                default: v1.35.0
+                description: |-
+                  KubernetesVersion is the version this decoy claims to be, e.g.
+                  "v1.35.0". It picks the real kube-apiserver image to run and the
+                  version fake nodes report, keeping the two consistent: a node newer
+                  than the control plane is impossible in a real cluster and gives the
+                  decoy away. Set spec.fakeNodes[].kubeletVersion to make a specific
+                  node lag behind, which real clusters do during an upgrade.
+                type: string
+              persistence:
+                description: |-
+                  Persistence backs the decoy's storage (kine's SQLite and the
+                  apiserver's audit.log) with a PersistentVolumeClaim instead of an
+                  emptyDir. Left unset, that storage is ephemeral: a pod reschedule
+                  starts the inner cluster fresh and drops whatever an attacker created
+                  and the audit.log on disk. Set it for a long-running engagement where
+                  that state must survive a reschedule.
+                properties:
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 1Gi
+                    description: Size is the requested volume size. Defaults to 1Gi.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: |-
+                      StorageClassName selects the StorageClass for the claim. Unset uses
+                      the cluster's default class.
+                    type: string
+                type: object
+              port:
+                default: 6443
+                description: |-
+                  Port is the port the Service exposes to decoy clients, routed
+                  directly to the inner kube-apiserver's own secure port.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              resources:
+                default:
+                  limits:
+                    cpu: 250m
+                    memory: 256Mi
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                description: |-
+                  Resources applied to every container of the honeypot pod. The
+                  default is small but explicit, so this still deploys in a namespace
+                  with a ResourceQuota that requires limits.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              runtimeClassName:
+                description: |-
+                  RuntimeClassName runs the honeypot pod under a sandboxed container
+                  runtime, e.g. "gvisor". `kubectl exec` into a decoy pod runs a real
+                  process, so this adds a stronger boundary around it. Unset, the pod
+                  uses the cluster's normal runtime and is still hardened: non-root,
+                  no capabilities, no privilege escalation, seccomp. Only set this to
+                  a RuntimeClass your cluster already has, or the pod won't schedule.
+                type: string
+              sans:
+                description: |-
+                  SANs are extra DNS names or IPs added to the honeypot's TLS
+                  certificate, to make it resemble a real cluster's apiserver, e.g.
+                  "kubernetes.default.svc". Only applied when the certificate is first
+                  issued: to change it later, delete the "<name>-decoy" Secret.
+                items:
+                  type: string
+                type: array
+              seedSystemComponents:
+                default: true
+                description: |-
+                  SeedSystemComponents adds the standard kube-system pods every real
+                  cluster has (etcd, kube-apiserver, kube-controller-manager,
+                  kube-scheduler, kube-proxy, coredns) so `kubectl get pods -A` looks
+                  like a real cluster with no extra authoring. Defaults to true.
+
+                  Set false to control kube-system yourself: nothing is auto-added,
+                  and you declare exactly what an attacker sees via fakePods. Use this
+                  to match a specific cluster's real shape, e.g. adding the CNI's own
+                  pods (cilium, calico-node) or dropping etcd on a managed cluster
+                  like EKS that hides its control plane.
+                type: boolean
+            type: object
+            x-kubernetes-validations:
+            - message: each fakePods[].nodeName must name one of spec.fakeNodes
+              rule: '!has(self.fakePods) || self.fakePods.all(p, !has(p.nodeName)
+                || size(p.nodeName) == 0 || (has(self.fakeNodes) && self.fakeNodes.exists(n,
+                n.name == p.nodeName)))'
+            - message: spec.execIsolation requires spec.runtimeClassName so the added
+                privilege (root, CAP_SYS_ADMIN, no seccomp) is bounded by a sandboxed
+                runtime such as gVisor rather than the host kernel
+              rule: '!has(self.execIsolation) || !self.execIsolation || (has(self.runtimeClassName)
+                && size(self.runtimeClassName) > 0)'
+          status:
+            description: DecoyStatus defines the observed state of a Decoy environment.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the Decoy's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              credentialsSecret:
+                description: |-
+                  CredentialsSecret names the Secret holding everything needed to reach
+                  this honeypot: the decoy token, the CA, the TLS keypair, and a
+                  ready-to-use kubeconfig.
+                type: string
+              endpoint:
+                description: Endpoint is the in-cluster address clients reach the
+                  honeypot on.
+                type: string
+              intrusionActivity:
+                description: |-
+                  IntrusionActivity summarizes the traffic this decoy has drawn, so
+                  `kubectl get decoys` surfaces which traps have been touched without
+                  reading the audit log. Only requests under a non-system identity
+                  (someone holding the decoy token) are counted here, never the
+                  operator's own housekeeping.
+                properties:
+                  firstSeen:
+                    description: |-
+                      FirstSeen is when this decoy got its first request from someone who
+                      should not have been talking to it.
+                    format: date-time
+                    type: string
+                  lastSeen:
+                    description: LastSeen is the most recent such request.
+                    format: date-time
+                    type: string
+                  lastSourceIP:
+                    description: LastSourceIP is where the most recent one came from.
+                    type: string
+                  requestCount:
+                    description: RequestCount is how many of those requests we have
+                      counted so far.
+                    format: int64
+                    type: integer
+                type: object
+              joinedPods:
+                description: |-
+                  JoinedPods are the real Pods currently mirrored into the honeypot
+                  by the honeypod.io/join annotation.
+                items:
+                  description: |-
+                    JoinedPod is a real Pod mirrored into the honeypot by the
+                    honeypod.io/join annotation. Only its metadata is copied: name,
+                    namespace, images, and labels, never its Secrets or volumes. The real
+                    node it runs on is left out too, so the honeypot places it on one of
+                    spec.fakeNodes instead of naming a real one.
+                  properties:
+                    name:
+                      description: Name of the real Pod.
+                      type: string
+                    namespace:
+                      description: Namespace of the real Pod.
+                      type: string
+                    redirected:
+                      description: |-
+                        Redirected reports whether this Pod's own traffic goes to the
+                        honeypot. It is true only when the Pod passed through the join
+                        webhook at creation, which is what swaps in the decoy API address
+                        and token.
+
+                        Annotating a Pod that is already running still mirrors it here, so
+                        an attacker inside the honeypot sees it, but a Pod's env and volumes
+                        cannot be changed after creation, so its traffic keeps reaching the
+                        real cluster until it is recreated. False means exactly that: listed
+                        inside the decoy, not yet trapped.
+                      type: boolean
+                  required:
+                  - name
+                  - namespace
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase is Pending, Ready, or Failed. On Failed, the Ready condition
+                  carries the reason.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: providers.honeypod.io
+spec:
+  group: honeypod.io
+  names:
+    kind: Provider
+    listKind: ProviderList
+    plural: providers
+    singular: provider
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Provider is where Alerts and AuditSinks send to: Discord, Loki, or a
+          generic webhook. It has no status: nothing reconciles it, it is read
+          when an event fires.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProviderSpec configures one notification/log destination.
+            properties:
+              address:
+                description: Address is the destination URL, given directly.
+                type: string
+              secretRef:
+                description: |-
+                  SecretRef names a same-namespace Secret whose "address" key holds the
+                  destination URL, for a webhook URL that shouldn't be spec-visible.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              type:
+                description: Type selects the wire format used to talk to Address.
+                enum:
+                - discord
+                - loki
+                - generic-webhook
+                type: string
+            required:
+            - type
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: alerts.honeypod.io
+spec:
+  group: honeypod.io
+  names:
+    kind: Alert
+    listKind: AlertList
+    plural: alerts
+    singular: alert
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.providerRef.type
+      name: Provider
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Alert notifies a Provider when a Pod is joined by a Decoy, or when
+          something notable happens inside one. It has no status: nothing
+          reconciles it, it is read when an event fires.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AlertSpec defines what an Alert notifies on, and where.
+            properties:
+              eventTypes:
+                description: |-
+                  EventTypes to notify on. Defaults to both PodJoin and
+                  AuditActivity.
+                items:
+                  description: AlertEventType is one kind of event an Alert can fire
+                    on.
+                  enum:
+                  - PodJoin
+                  - AuditActivity
+                  type: string
+                type: array
+              excludeResources:
+                description: |-
+                  ExcludeResources lists API resources to always drop from
+                  AuditActivity, on top of the built-in heuristic. Each entry is
+                  "resource" (any subresource) or "resource/subresource" (e.g. "pods",
+                  "pods/log").
+                items:
+                  type: string
+                type: array
+              excludeVerbs:
+                description: |-
+                  ExcludeVerbs lists audit verbs (e.g. "watch") to always drop from
+                  AuditActivity, on top of the built-in heuristic.
+                items:
+                  type: string
+                type: array
+              includeAll:
+                description: |-
+                  IncludeAll alerts on every audit event, including the honeypot's own
+                  internal traffic. Off by default, since that traffic is constant and
+                  would drown out a real intruder. ExcludeVerbs and ExcludeResources
+                  still apply on top.
+                type: boolean
+              providerRef:
+                description: ProviderRef selects a same-namespace Provider to send
+                  notifications to.
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef, if set, overrides the Provider's own spec.secretRef --
+                      this Secret's "address" key is used instead.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  type:
+                    description: |-
+                      Type matches the target Provider's spec.type. Exactly one Provider
+                      of this type must exist in the namespace.
+                    type: string
+                required:
+                - type
+                type: object
+              targets:
+                description: |-
+                  Targets lists which Decoy(s) this Alert watches. Empty means every
+                  Decoy -- the intended shape for a single-decoy deployment, where one
+                  Alert covers the sole decoy without naming it.
+                items:
+                  description: |-
+                    DecoyTarget names one Decoy, or every Decoy in a namespace,
+                    that an Alert or AuditSink applies to.
+                  properties:
+                    name:
+                      description: Name of the Decoy, or "*" for every Decoy in Namespace.
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace the Decoy is in. Defaults to the Alert/AuditSink's own
+                        namespace.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - providerRef
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: auditsinks.honeypod.io
+spec:
+  group: honeypod.io
+  names:
+    kind: AuditSink
+    listKind: AuditSinkList
+    plural: auditsinks
+    singular: auditsink
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.providerRef.type
+      name: Provider
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AuditSink ships a Decoy's full audit event stream to a Provider such
+          as Loki, for continuous analysis rather than discrete alerts. It has no
+          status: nothing reconciles it, it is read when an event fires.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AuditSinkSpec defines where a Decoy's full, unfiltered audit stream is
+              shipped -- unlike Alert, every event is forwarded (no notability filter).
+            properties:
+              providerRef:
+                description: |-
+                  ProviderRef selects a Provider in this namespace to ship events to.
+                  A "discord" Provider is rejected: a chat webhook is the wrong shape
+                  for a high-volume log stream.
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef, if set, overrides the Provider's own spec.secretRef --
+                      this Secret's "address" key is used instead.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  type:
+                    description: |-
+                      Type matches the target Provider's spec.type. Exactly one Provider
+                      of this type must exist in the namespace.
+                    type: string
+                required:
+                - type
+                type: object
+              targets:
+                description: |-
+                  Targets lists which Decoy(s) this AuditSink ships audit events for.
+                  Empty means every Decoy -- the intended shape for a single-decoy
+                  deployment, where one AuditSink covers the sole decoy without naming it.
+                items:
+                  description: |-
+                    DecoyTarget names one Decoy, or every Decoy in a namespace,
+                    that an Alert or AuditSink applies to.
+                  properties:
+                    name:
+                      description: Name of the Decoy, or "*" for every Decoy in Namespace.
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace the Decoy is in. Defaults to the Alert/AuditSink's own
+                        namespace.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - providerRef
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: honeypod-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - honeypod.io
+  resources:
+  - alerts
+  - auditsinks
+  - providers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - honeypod.io
+  resources:
+  - decoys
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - honeypod.io
+  resources:
+  - decoys/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - honeypod.io
+  resources:
+  - decoys/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: honeypod-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: honeypod-manager-role
+subjects:
+- kind: ServiceAccount
+  name: honeypod-manager
+  namespace: honeypod
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: honeypod-manager
+  namespace: honeypod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: honeypod-controller-manager
+  namespace: honeypod
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: honeypod-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: honeypod-operator
+    spec:
+      serviceAccountName: honeypod-manager
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: manager
+        image: honeypod/manager:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/manager"]
+        ports:
+        - name: metrics
+          containerPort: 8080
+        - name: health
+          containerPort: 8081
+        - name: audit-webhook
+          containerPort: 9880
+        - name: join-webhook
+          containerPort: 9443
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: honeypod-controller-manager
+  namespace: honeypod
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+spec:
+  selector:
+    app.kubernetes.io/name: honeypod-operator
+  ports:
+  - name: audit-webhook
+    port: 9880
+    targetPort: audit-webhook
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+---
+# The MutatingWebhookConfiguration behind the honeypod.io/join annotation:
+# on Pod CREATE it overrides KUBERNETES_SERVICE_HOST/PORT and swaps in the
+# decoy ServiceAccount token, so anything in that pod using the standard
+# in-cluster config talks to the honeypot instead of the real cluster.
+# See internal/controller/join_webhook.go.
+apiVersion: v1
+kind: Service
+metadata:
+  name: honeypod-webhook
+  namespace: honeypod
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+spec:
+  selector:
+    app.kubernetes.io/name: honeypod-operator
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: join-webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: honeypod-pod-join
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+webhooks:
+- name: podjoin.honeypod.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  # Ignore, not Fail: a MutatingWebhookConfiguration's own selectors
+  # (namespaceSelector/objectSelector) can't reliably express "only Pods
+  # carrying the honeypod.io/join annotation" -- objectSelector matches
+  # metadata.labels, not metadata.annotations -- so this webhook's rules
+  # below necessarily match every Pod CREATE, cluster-wide, and the
+  # annotation check happens inside the handler itself
+  # (internal/controller/join_webhook.go's PodJoinMutator.MutatePod
+  # returns a no-op patch when it's absent). With that broad a match,
+  # failurePolicy must be Ignore: this webhook being briefly unreachable
+  # (a manager rollout, a caBundle not patched in yet -- see
+  # internal/controller/webhookcert.go) must never block ordinary pod
+  # creation for the entire cluster.
+  failurePolicy: Ignore
+  reinvocationPolicy: Never
+  timeoutSeconds: 5
+  clientConfig:
+    service:
+      name: honeypod-webhook
+      namespace: honeypod
+      path: /mutate-pods
+      port: 443
+    # Patched at every manager process start by
+    # internal/controller.PatchMutatingWebhookCABundle (see
+    # cmd/manager/main.go) -- the operator's webhook-serving CA is
+    # generated once and persisted in a Secret
+    # (internal/controller.EnsureWebhookServingCert), so it stays the same
+    # across restarts, but a caBundle baked into this static manifest would
+    # still never match it (the CA is only known once generated).
+    # Left empty here deliberately; until the manager patches this in,
+    # the apiserver can't complete TLS verification against this webhook
+    # and (per failurePolicy: Ignore above) simply treats every admission
+    # as allowed with no patch in the meantime.
+    caBundle: ""
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE"]
+    resources: ["pods"]
+---
+# A minimal Decoy in the operator namespace, so `kubectl apply -f
+# manifests/quickstart.yaml` gives you a working honeypot in one shot. See
+# the project README for what to do with it next.
+apiVersion: honeypod.io/v1alpha1
+kind: Decoy
+metadata:
+  name: demo
+  namespace: honeypod
+spec:
+  fakeNodes:
+  - name: demo-node-1
+  fakePods:
+  - name: checkout-api
+    namespace: billing
+    containers:
+    - name: app
+      image: internal-registry.example.com/checkout-api:1.4.2
+    logLines:
+    - "2026-01-01T00:00:00.000Z INFO  checkout-api starting, listening on :8080"
+    - "2026-01-01T00:00:01.000Z INFO  connected to db=checkout-primary"
+  fakeSecrets:
+  - name: checkout-api-db-credentials
+    namespace: billing
+    data:
+      username: checkout_svc
+      password: hunter2-not-a-real-password
+      host: checkout-primary.billing.svc.cluster.local

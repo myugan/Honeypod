@@ -1,0 +1,8 @@
+apiVersion: honeypod.io/v1alpha1
+kind: Decoy
+metadata:
+  name: decoy
+spec:
+  fakeNodes:
+  - name: zeno-md-1-h8k3n-q9x2p
+    kubeletVersion: v1.35.0

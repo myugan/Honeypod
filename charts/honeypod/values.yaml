@@ -1,0 +1,68 @@
+# Default values for the Honeypod operator.
+
+image:
+  repository: honeypod/manager
+  # Overrides the image tag. Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# imagePullSecrets for a private registry hosting the manager image.
+imagePullSecrets: []
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  # Create the ServiceAccount. Set false to use an existing one named below.
+  create: true
+  # Name of the ServiceAccount. Defaults to the fullname when empty.
+  name: ""
+
+# Pod- and container-level security context for the manager. The defaults
+# run it non-root with no capabilities, matching the plain manifests.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+# Manager logging. These map straight onto the manager's own flags.
+logging:
+  # Print audit events received from each decoy's inner apiserver to the
+  # operator log. false keeps the log quiet and relies on an AuditSink.
+  auditEvents: true
+  # Also print the events the notability heuristic drops (kube-apiserver's
+  # startup burst, kubelet-shim heartbeats). Noisy; for debugging only.
+  allAuditEvents: false
+  # Format for those audit lines: "text" (key=value) or "json".
+  auditFormat: text
+  # Operational (controller-runtime) log encoding: "console" or "json".
+  encoder: console
+  # Operational log verbosity: debug, info, error, or a positive integer.
+  level: debug
+
+# Extra flags passed verbatim to the manager, for anything not exposed above.
+extraArgs: []
+
+# Create the operator's namespace. Off by default -- prefer
+# `helm install ... --create-namespace`, which Helm manages more cleanly.
+createNamespace: false
+
+# nameOverride / fullnameOverride follow Helm convention if you need them.
+nameOverride: ""
+fullnameOverride: ""

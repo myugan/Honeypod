@@ -1,0 +1,26 @@
+# Notifies the discord-type Provider in this namespace (see
+# honeypod_provider_discord.yaml -- exactly one Provider of that
+# type must exist here) whenever a pod joins/leaves httpbin-decoy, or
+# notable audit activity happens against it -- eventTypes omitted here
+# defaults to both. The only accepted values are PodJoin and AuditActivity,
+# so a typo is rejected on apply instead of silently never firing.
+#
+# The built-in notability filter drops kubelet-shim's own housekeeping
+# (status/lease heartbeats), which shares the decoy's identity with a real
+# attacker so it can't be told apart by username. excludeVerbs/
+# excludeResources tune it further; includeAll bypasses it entirely.
+apiVersion: honeypod.io/v1alpha1
+kind: Alert
+metadata:
+  name: httpbin-decoy-alerts
+  namespace: honeypod-decoy
+spec:
+  providerRef:
+    type: discord
+    # secretRef: {name: team-b-webhook}   # reuse the discord Provider with
+    # a different webhook Secret than its own spec.secretRef, e.g. per-team
+  targets:
+  - name: httpbin-decoy
+  # excludeVerbs: ["watch"]
+  # excludeResources: ["events", "pods/log"]
+  # includeAll: false

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: honeypod
+description: The Honeypod operator -- deploys a real, nested Kubernetes control plane as a honeypot.
+type: application
+# Chart version, bumped per chart change. appVersion tracks the operator image.
+version: 0.1.0
+appVersion: "latest"
+kubeVersion: ">=1.29.0"
+home: https://github.com/myugan/Honeypod
+sources:
+- https://github.com/myugan/Honeypod
+keywords:
+- honeypot
+- security
+- operator
+maintainers:
+- name: myugan

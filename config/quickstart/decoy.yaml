@@ -1,0 +1,27 @@
+# A minimal Decoy in the operator namespace, so `kubectl apply -f
+# manifests/quickstart.yaml` gives you a working honeypot in one shot. See
+# the project README for what to do with it next.
+apiVersion: honeypod.io/v1alpha1
+kind: Decoy
+metadata:
+  name: demo
+  namespace: honeypod
+spec:
+  fakeNodes:
+  - name: demo-node-1
+  fakePods:
+  - name: checkout-api
+    namespace: billing
+    containers:
+    - name: app
+      image: internal-registry.example.com/checkout-api:1.4.2
+    logLines:
+    - "2026-01-01T00:00:00.000Z INFO  checkout-api starting, listening on :8080"
+    - "2026-01-01T00:00:01.000Z INFO  connected to db=checkout-primary"
+  fakeSecrets:
+  - name: checkout-api-db-credentials
+    namespace: billing
+    data:
+      username: checkout_svc
+      password: hunter2-not-a-real-password
+      host: checkout-primary.billing.svc.cluster.local

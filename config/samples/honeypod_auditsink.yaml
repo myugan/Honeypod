@@ -1,0 +1,22 @@
+# Ships every Honeypod decoy's full, unfiltered audit stream in this
+# namespace ("*") to Loki -- unlike Alert, nothing is filtered for
+# notability, so this is the full record, not a subset.
+apiVersion: honeypod.io/v1alpha1
+kind: Provider
+metadata:
+  name: loki
+  namespace: honeypod-decoy
+spec:
+  type: loki
+  address: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+---
+apiVersion: honeypod.io/v1alpha1
+kind: AuditSink
+metadata:
+  name: httpbin-decoy-audit
+  namespace: honeypod-decoy
+spec:
+  providerRef:
+    type: loki
+  targets:
+  - name: "*"

@@ -1,0 +1,7 @@
+/bin/
+*.tar
+.claude/
+
+# Local build outputs from `go build ./cmd/...` at the repo root
+/kubelet-shim
+/manager

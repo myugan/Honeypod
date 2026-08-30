@@ -1,0 +1,52 @@
+# The busybox the "minimal" exec profile serves. Taken from the official
+# image rather than Debian's busybox-static/busybox packages, whose 1.35.0
+# build segfaults in the wget applet: `wget -O- <url>` dies with SIGSEGV on
+# a refused connection and on a real host alike. wget is one of the first
+# things anyone runs in a container they have just landed in, so a decoy
+# whose wget dumps core is both broken and unmistakable -- no real
+# alpine/busybox image behaves that way. The official binary returns the
+# ordinary "can't connect to remote host ...: Connection refused" instead.
+FROM busybox:1.36-musl AS busybox
+
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/kubelet-shim ./cmd/kubelet-shim
+
+# Debian slim, not distroless: a real `kubectl exec`/`attach -it` into a
+# decoy now runs a real process in this container (see internal/kubeletshim's
+# exec.go), so it needs a real shell, real coreutils, and a real-looking
+# fingerprint (a real `apt`, a real /etc/os-release saying Debian) to be
+# worth anything, unlike the kubelet-shim binary itself, which is still
+# static and needs nothing from the base image to run. Debian over Alpine:
+# it's the more common base for real production containers, still small.
+FROM debian:bookworm-slim
+# A real exec session runs real commands in this container (see
+# internal/kubeletshim's exec.go). debian:bookworm-slim ships coreutils
+# (ls/cat/...) but not the process/network tools a real workload container
+# almost always has -- an attacker running `ps`/`top`/`ip` and getting
+# "command not found" is itself a tell. Install the common set so the
+# environment looks like an ordinary container, not a stripped honeypot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps iproute2 iputils-ping curl \
+    && rm -rf /var/lib/apt/lists/*
+# The "minimal" exec profile (spec.execProfile) serves a busybox shell whose
+# PATH holds only busybox applets, matching an alpine/busybox image. Install
+# the applet symlinks into a dedicated dir the shim points PATH at. Kept under
+# /usr/lib, not at the root: a top-level /busybox-bin is visible in `ls /` and
+# no real alpine image has it, which gave the profile away.
+COPY --from=busybox /bin/busybox /usr/lib/busybox/busybox
+RUN /usr/lib/busybox/busybox --install -s /usr/lib/busybox
+# "app", not "kubelet-shim": a real exec session (see internal/kubeletshim's
+# exec.go) runs real `whoami`/`id` in this container, and this username is
+# what they'd resolve to -- shouldn't be the component's own internal name.
+RUN useradd --no-create-home --uid 1000 --shell /bin/sh app
+# Installed as "app" on a normal PATH directory, not "/kubelet-shim" at
+# the filesystem root, for the same reason the user above is "app": a
+# real exec session runs `ls /` and `ps` in this container, and a binary
+# named after the component sitting alone at / named the trap outright.
+COPY --from=build /out/kubelet-shim /usr/local/bin/app
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/app"]

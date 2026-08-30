@@ -1,0 +1,68 @@
+# The MutatingWebhookConfiguration behind the honeypod.io/join annotation:
+# on Pod CREATE it overrides KUBERNETES_SERVICE_HOST/PORT and swaps in the
+# decoy ServiceAccount token, so anything in that pod using the standard
+# in-cluster config talks to the honeypot instead of the real cluster.
+# See internal/controller/join_webhook.go.
+apiVersion: v1
+kind: Service
+metadata:
+  name: honeypod-webhook
+  namespace: honeypod
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+spec:
+  selector:
+    app.kubernetes.io/name: honeypod-operator
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: join-webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: honeypod-pod-join
+  labels:
+    app.kubernetes.io/name: honeypod-operator
+webhooks:
+- name: podjoin.honeypod.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  # Ignore, not Fail: a MutatingWebhookConfiguration's own selectors
+  # (namespaceSelector/objectSelector) can't reliably express "only Pods
+  # carrying the honeypod.io/join annotation" -- objectSelector matches
+  # metadata.labels, not metadata.annotations -- so this webhook's rules
+  # below necessarily match every Pod CREATE, cluster-wide, and the
+  # annotation check happens inside the handler itself
+  # (internal/controller/join_webhook.go's PodJoinMutator.MutatePod
+  # returns a no-op patch when it's absent). With that broad a match,
+  # failurePolicy must be Ignore: this webhook being briefly unreachable
+  # (a manager rollout, a caBundle not patched in yet -- see
+  # internal/controller/webhookcert.go) must never block ordinary pod
+  # creation for the entire cluster.
+  failurePolicy: Ignore
+  reinvocationPolicy: Never
+  timeoutSeconds: 5
+  clientConfig:
+    service:
+      name: honeypod-webhook
+      namespace: honeypod
+      path: /mutate-pods
+      port: 443
+    # Patched at every manager process start by
+    # internal/controller.PatchMutatingWebhookCABundle (see
+    # cmd/manager/main.go) -- the operator's webhook-serving CA is
+    # generated once and persisted in a Secret
+    # (internal/controller.EnsureWebhookServingCert), so it stays the same
+    # across restarts, but a caBundle baked into this static manifest would
+    # still never match it (the CA is only known once generated).
+    # Left empty here deliberately; until the manager patches this in,
+    # the apiserver can't complete TLS verification against this webhook
+    # and (per failurePolicy: Ignore above) simply treats every admission
+    # as allowed with no patch in the meantime.
+    caBundle: ""
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE"]
+    resources: ["pods"]

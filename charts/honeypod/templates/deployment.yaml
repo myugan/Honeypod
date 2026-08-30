@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "honeypod.fullname" . }}
+  namespace: {{ include "honeypod.namespace" . }}
+  labels:
+    {{- include "honeypod.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "honeypod.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "honeypod.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "honeypod.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: manager
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        # Names/URLs are passed explicitly so the manager finds its own
+        # Service and webhook config whatever the release is named. The
+        # ".svc" host uses the pinned operator namespace (see the namespace
+        # helper for why it isn't .Release.Namespace).
+        - --manager-audit-webhook-url=http://{{ include "honeypod.fullname" . }}.{{ include "honeypod.namespace" . }}.svc:9880
+        - --join-webhook-config-name={{ include "honeypod.fullname" . }}-pod-join
+        - --join-webhook-dns-names={{ include "honeypod.fullname" . }}-webhook.{{ include "honeypod.namespace" . }}.svc,{{ include "honeypod.fullname" . }}-webhook.{{ include "honeypod.namespace" . }}.svc.cluster.local
+        - --log-audit-events={{ .Values.logging.auditEvents }}
+        - --log-all-audit-events={{ .Values.logging.allAuditEvents }}
+        - --audit-log-format={{ .Values.logging.auditFormat }}
+        - --zap-encoder={{ .Values.logging.encoder }}
+        - --zap-log-level={{ .Values.logging.level }}
+        {{- with .Values.extraArgs }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        ports:
+        - name: metrics
+          containerPort: 8080
+        - name: health
+          containerPort: 8081
+        - name: audit-webhook
+          containerPort: 9880
+        - name: join-webhook
+          containerPort: 9443
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

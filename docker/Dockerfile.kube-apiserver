@@ -1,0 +1,20 @@
+# Repackages the real, unmodified upstream kube-apiserver binary into a
+# minimal, non-root image running as a fixed UID consistent with this
+# project's other containers (the upstream registry.k8s.io/kube-apiserver
+# image runs as root and has no non-root variant). This is a real,
+# unmodified kube-apiserver -- full API surface, real RBAC/discovery/audit
+# machinery -- not a reimplementation; only the packaging differs from
+# upstream.
+#
+# The binary is kept at the SAME path (/usr/local/bin/kube-apiserver) the
+# upstream image itself uses -- internal/controller/render.go's Deployment
+# spec pins Command to that exact path explicitly (bypassing the upstream
+# image's own ENTRYPOINT, /go-runner, a logging wrapper that doesn't
+# understand kube-apiserver's own flags) so both this repackaged image and
+# the raw upstream tag work identically without a code branch.
+FROM registry.k8s.io/kube-apiserver:v1.31.0 AS apiserver
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=apiserver /usr/local/bin/kube-apiserver /usr/local/bin/kube-apiserver
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/kube-apiserver"]
